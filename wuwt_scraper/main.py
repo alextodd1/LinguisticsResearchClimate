@@ -339,6 +339,7 @@ def main():
     # Apply command line overrides
     config.base_dir = Path(args.output)
     config.corpus_dir = config.base_dir / "corpus"
+    config.txt_dir = config.base_dir / "txt"
     config.images_dir = config.base_dir / "images"
     config.metadata_dir = config.base_dir / "metadata"
     config.logs_dir = config.base_dir / "logs"

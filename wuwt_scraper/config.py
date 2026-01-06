@@ -33,6 +33,7 @@ class ScraperConfig:
     # Output directories
     base_dir: Path = field(default_factory=lambda: Path("./output"))
     corpus_dir: Path = field(default_factory=lambda: Path("./output/corpus"))
+    txt_dir: Path = field(default_factory=lambda: Path("./output/txt"))
     images_dir: Path = field(default_factory=lambda: Path("./output/images"))
     metadata_dir: Path = field(default_factory=lambda: Path("./output/metadata"))
     logs_dir: Path = field(default_factory=lambda: Path("./logs"))
@@ -41,7 +42,7 @@ class ScraperConfig:
     db_path: Path = field(default_factory=lambda: Path("./output/scraper_progress.db"))
 
     # Processing options
-    download_images: bool = True
+    download_images: bool = False  # Disabled - not needed for corpus linguistics
     max_image_size_mb: int = 10
 
     # Comment loading
@@ -51,6 +52,7 @@ class ScraperConfig:
         """Ensure all paths are Path objects."""
         self.base_dir = Path(self.base_dir)
         self.corpus_dir = Path(self.corpus_dir)
+        self.txt_dir = Path(self.txt_dir)
         self.images_dir = Path(self.images_dir)
         self.metadata_dir = Path(self.metadata_dir)
         self.logs_dir = Path(self.logs_dir)
@@ -58,8 +60,8 @@ class ScraperConfig:
 
     def create_directories(self):
         """Create all necessary output directories."""
-        for directory in [self.base_dir, self.corpus_dir, self.images_dir,
-                         self.metadata_dir, self.logs_dir]:
+        for directory in [self.base_dir, self.corpus_dir, self.txt_dir,
+                         self.images_dir, self.metadata_dir, self.logs_dir]:
             directory.mkdir(parents=True, exist_ok=True)
 
     @classmethod

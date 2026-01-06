@@ -61,7 +61,118 @@ class VerticalWriter:
             f.write(content)
             f.write('\n')
 
+        # Also write plain text version
+        self.write_article_txt(article)
+
         return str(filepath)
+
+    def write_article_txt(self, article: Article, output_dir: Optional[Path] = None) -> str:
+        """
+        Write article and comments as plain text file.
+
+        Each article gets its own .txt file for easy reading/analysis.
+
+        Args:
+            article: Article object with comments
+            output_dir: Optional output directory (uses config txt_dir if not specified)
+
+        Returns:
+            Path to written file
+        """
+        output_dir = output_dir or self.config.txt_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Use article ID for filename
+        filename = f"{article.id}.txt"
+        filepath = output_dir / filename
+
+        # Generate plain text content
+        content = self._article_to_txt(article)
+
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+        return str(filepath)
+
+    def _article_to_txt(self, article: Article) -> str:
+        """
+        Convert article to plain text format.
+
+        Args:
+            article: Article object
+
+        Returns:
+            Plain text string
+        """
+        lines = []
+
+        # Header with metadata
+        lines.append("=" * 80)
+        lines.append(f"TITLE: {article.title}")
+        lines.append(f"AUTHOR: {article.author}")
+        if article.date_published:
+            lines.append(f"DATE: {article.date_published.strftime('%Y-%m-%d')}")
+        lines.append(f"URL: {article.url}")
+        if article.categories:
+            lines.append(f"CATEGORIES: {', '.join(article.categories)}")
+        if article.tags:
+            lines.append(f"TAGS: {', '.join(article.tags)}")
+        lines.append("=" * 80)
+        lines.append("")
+
+        # Article body
+        lines.append("ARTICLE CONTENT:")
+        lines.append("-" * 40)
+        clean_text = self.cleaner.clean(article.content_text)
+        lines.append(clean_text)
+        lines.append("")
+
+        # Comments section
+        if article.comments:
+            lines.append("=" * 80)
+            lines.append(f"COMMENTS ({len(article.comments)} total):")
+            lines.append("=" * 80)
+            lines.append("")
+
+            for i, comment in enumerate(article.comments, 1):
+                lines.append(self._comment_to_txt(comment, i))
+                lines.append("")
+
+        return '\n'.join(lines)
+
+    def _comment_to_txt(self, comment: Comment, index: int) -> str:
+        """
+        Convert comment to plain text format.
+
+        Args:
+            comment: Comment object
+            index: Comment number
+
+        Returns:
+            Plain text string for comment
+        """
+        lines = []
+
+        # Indent based on depth
+        indent = "  " * comment.depth
+
+        # Comment header
+        timestamp_str = comment.timestamp.strftime('%Y-%m-%d %H:%M') if comment.timestamp else "Unknown date"
+        lines.append(f"{indent}--- Comment #{index} ---")
+        lines.append(f"{indent}Author: {comment.author_name}")
+        lines.append(f"{indent}Date: {timestamp_str}")
+        lines.append(f"{indent}Votes: +{comment.upvotes}/-{comment.downvotes}")
+        if comment.parent_id:
+            lines.append(f"{indent}Reply to: {comment.parent_id}")
+        lines.append(f"{indent}")
+
+        # Comment text
+        clean_text = self.cleaner.clean(comment.text_clean or comment.text_html)
+        # Indent the comment text as well
+        for line in clean_text.split('\n'):
+            lines.append(f"{indent}{line}")
+
+        return '\n'.join(lines)
 
     def _article_to_vertical(self, article: Article) -> str:
         """
