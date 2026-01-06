@@ -1,0 +1,327 @@
+"""
+Sketch Engine vertical format writer.
+"""
+
+import logging
+import re
+from datetime import datetime
+from pathlib import Path
+from typing import List, Optional
+
+from ..models import Article, Comment
+from ..config import ScraperConfig
+from .tokeniser import Tokeniser
+from .text_cleaner import TextCleaner
+
+logger = logging.getLogger(__name__)
+
+
+class VerticalWriter:
+    """
+    Writer for Sketch Engine vertical format (.vert files).
+
+    Produces tokenized output with XML-style structural tags.
+    """
+
+    def __init__(self, config: ScraperConfig):
+        self.config = config
+        self.tokeniser = Tokeniser()
+        self.cleaner = TextCleaner()
+
+    def write_article(self, article: Article, output_dir: Optional[Path] = None) -> str:
+        """
+        Convert article and comments to vertical format.
+
+        Args:
+            article: Article object with comments
+            output_dir: Optional output directory (uses config if not specified)
+
+        Returns:
+            Path to written file
+        """
+        output_dir = output_dir or self.config.corpus_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Determine output file based on article date
+        if article.date_published:
+            year = article.date_published.year
+            month = article.date_published.month
+        else:
+            year = 2017
+            month = 1
+
+        filename = f"wuwt_{year}_{month:02d}.vert"
+        filepath = output_dir / filename
+
+        # Generate vertical content
+        content = self._article_to_vertical(article)
+
+        # Append to file
+        with open(filepath, 'a', encoding='utf-8') as f:
+            f.write(content)
+            f.write('\n')
+
+        return str(filepath)
+
+    def _article_to_vertical(self, article: Article) -> str:
+        """
+        Convert article to vertical format string.
+
+        Args:
+            article: Article object
+
+        Returns:
+            Vertical format string
+        """
+        lines = []
+
+        # Document opening tag with metadata
+        doc_attrs = self._format_doc_attributes(article)
+        lines.append(f'<doc {doc_attrs}>')
+
+        # Article body
+        lines.append('<text type="article_body">')
+
+        # Clean and tokenize article content
+        clean_text = self.cleaner.clean(article.content_text)
+        paragraphs = self.cleaner.extract_paragraphs(clean_text)
+
+        for para in paragraphs:
+            if para.strip():
+                lines.append('<p>')
+                lines.append(self.tokeniser.tokenize_to_vertical(para))
+                lines.append('</p>')
+
+        lines.append('</text>')
+
+        # Comments section
+        if article.comments:
+            lines.append('<text type="comments">')
+
+            for comment in article.comments:
+                comment_vertical = self._comment_to_vertical(comment)
+                lines.append(comment_vertical)
+
+            lines.append('</text>')
+
+        # Document closing tag
+        lines.append('</doc>')
+
+        return '\n'.join(lines)
+
+    def _format_doc_attributes(self, article: Article) -> str:
+        """Format document attributes for opening tag."""
+        attrs = []
+
+        # Required attributes
+        attrs.append(f'id="{self._escape_attr(article.id)}"')
+        attrs.append(f'url="{self._escape_attr(article.url)}"')
+        attrs.append(f'title="{self._escape_attr(article.title)}"')
+        attrs.append(f'author="{self._escape_attr(article.author)}"')
+
+        # Date attributes
+        if article.date_published:
+            date_str = article.date_published.strftime('%Y-%m-%d')
+            attrs.append(f'date="{date_str}"')
+            attrs.append(f'year="{article.date_published.year}"')
+            attrs.append(f'month="{article.date_published.month:02d}"')
+        else:
+            attrs.append('date=""')
+            attrs.append('year=""')
+            attrs.append('month=""')
+
+        # Categories and tags (pipe-separated)
+        categories = '|'.join(self._escape_attr(c) for c in article.categories)
+        tags = '|'.join(self._escape_attr(t) for t in article.tags)
+
+        attrs.append(f'categories="{categories}"')
+        attrs.append(f'tags="{tags}"')
+
+        # Comment count
+        attrs.append(f'comment_count="{article.comment_count}"')
+
+        # Document type
+        attrs.append('type="article"')
+
+        return ' '.join(attrs)
+
+    def _comment_to_vertical(self, comment: Comment) -> str:
+        """
+        Convert comment to vertical format.
+
+        Args:
+            comment: Comment object
+
+        Returns:
+            Vertical format string for comment
+        """
+        lines = []
+
+        # Comment opening tag with metadata
+        attrs = self._format_comment_attributes(comment)
+        lines.append(f'<comment {attrs}>')
+
+        # Clean and tokenize comment text
+        clean_text = self.cleaner.clean(comment.text_clean or comment.text_html)
+
+        if clean_text:
+            lines.append(self.tokeniser.tokenize_to_vertical(clean_text))
+
+        lines.append('</comment>')
+
+        return '\n'.join(lines)
+
+    def _format_comment_attributes(self, comment: Comment) -> str:
+        """Format comment attributes for opening tag."""
+        attrs = []
+
+        attrs.append(f'id="{self._escape_attr(comment.id)}"')
+        attrs.append(f'author="{self._escape_attr(comment.author_name)}"')
+
+        # Timestamp
+        if comment.timestamp:
+            date_str = comment.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+            attrs.append(f'date="{date_str}"')
+        else:
+            attrs.append('date=""')
+
+        # Vote information
+        attrs.append(f'upvotes="{comment.upvotes}"')
+        attrs.append(f'downvotes="{comment.downvotes}"')
+        attrs.append(f'vote_score="{comment.vote_score}"')
+
+        # Reply structure
+        parent_id = comment.parent_id if comment.parent_id else "ROOT"
+        attrs.append(f'parent_id="{self._escape_attr(parent_id)}"')
+        attrs.append(f'depth="{comment.depth}"')
+
+        # Image information
+        has_images = "true" if comment.images else "false"
+        attrs.append(f'has_images="{has_images}"')
+
+        if comment.images:
+            image_refs = '|'.join(img.filename or img.original_url for img in comment.images)
+            attrs.append(f'image_refs="{self._escape_attr(image_refs)}"')
+        else:
+            attrs.append('image_refs=""')
+
+        return ' '.join(attrs)
+
+    def _escape_attr(self, value: str) -> str:
+        """Escape string for use in XML attribute."""
+        if not value:
+            return ""
+
+        value = str(value)
+
+        # Escape XML special characters
+        value = value.replace('&', '&amp;')
+        value = value.replace('<', '&lt;')
+        value = value.replace('>', '&gt;')
+        value = value.replace('"', '&quot;')
+
+        # Remove newlines and normalize whitespace
+        value = re.sub(r'\s+', ' ', value)
+
+        return value.strip()
+
+    def write_corpus_config(self, output_dir: Optional[Path] = None):
+        """
+        Write Sketch Engine corpus configuration file.
+
+        Args:
+            output_dir: Output directory
+        """
+        output_dir = output_dir or self.config.base_dir
+        config_path = output_dir / "corpus_config.txt"
+
+        config_content = '''NAME "WUWT Climate Discourse Corpus"
+PATH /path/to/corpus
+VERTICAL "wuwt_*.vert"
+ENCODING "utf-8"
+LANGUAGE "English"
+LOCALE "en_GB.UTF-8"
+
+ATTRIBUTE word
+ATTRIBUTE lc {
+    DYNAMIC lowercase
+    DYNLIB internal
+    FROMATTR word
+    FUNTYPE s
+    TRANSQUERY yes
+}
+
+STRUCTURE doc {
+    ATTRIBUTE id
+    ATTRIBUTE url
+    ATTRIBUTE title
+    ATTRIBUTE author
+    ATTRIBUTE date
+    ATTRIBUTE year
+    ATTRIBUTE month
+    ATTRIBUTE categories
+    ATTRIBUTE tags
+    ATTRIBUTE comment_count
+    ATTRIBUTE type
+}
+
+STRUCTURE text {
+    ATTRIBUTE type
+}
+
+STRUCTURE comment {
+    ATTRIBUTE id
+    ATTRIBUTE author
+    ATTRIBUTE date
+    ATTRIBUTE upvotes
+    ATTRIBUTE downvotes
+    ATTRIBUTE vote_score
+    ATTRIBUTE parent_id
+    ATTRIBUTE depth
+    ATTRIBUTE has_images
+    ATTRIBUTE image_refs
+}
+
+STRUCTURE p
+STRUCTURE s
+'''
+
+        with open(config_path, 'w', encoding='utf-8') as f:
+            f.write(config_content)
+
+        logger.info(f"Wrote corpus config to {config_path}")
+
+    def generate_stats_report(self, db) -> str:
+        """
+        Generate a statistics report.
+
+        Args:
+            db: Database instance
+
+        Returns:
+            Report text
+        """
+        stats = db.get_stats()
+
+        report = f"""
+WUWT Scraper Statistics Report
+Generated: {datetime.now().isoformat()}
+================================
+
+Articles:
+  Total discovered: {stats['total_articles']}
+  By status:
+"""
+        for status, count in stats.get('articles_by_status', {}).items():
+            report += f"    {status}: {count}\n"
+
+        report += f"""
+Comments:
+  Total scraped: {stats['total_comments']}
+
+Images:
+  Total found: {stats['total_images']}
+  Downloaded: {stats['downloaded_images']}
+"""
+
+        return report

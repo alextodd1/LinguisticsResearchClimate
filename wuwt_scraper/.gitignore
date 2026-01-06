@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Output (don't commit scraped data)
+output/
+logs/
+*.db
+
+# Test files
+test_*.py
+
+# OS
+.DS_Store
+Thumbs.db
