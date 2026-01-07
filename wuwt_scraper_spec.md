@@ -10,8 +10,8 @@ Build a web scraper to collect articles and comments from wattsupwiththat.com fo
 
 ### 1.2 Scope
 - **Date Range**: From Donald Trump's first inauguration (20 January 2017) to present (January 2026)
-- **Content**: All articles within date range, including full comment threads
-- **Output Format**: Sketch Engine vertical format (.vert files) with metadata structures
+- **Content**: All articles within date range, including full comment threads from all comment pages
+- **Output Format**: Plain text files (.txt) with structured metadata and comment threading
 
 ### 1.3 Estimated Scale
 Based on the site's archive (~150-200 articles/month), expect approximately:
@@ -119,19 +119,18 @@ https://wattsupwiththat.com/sitemap_index.xml
 .wpd-comment-text a[href*=".gif"]
 ```
 
-### 3.4 Pagination/Load More for Comments
-wpDiscuz may use:
-- AJAX lazy loading for additional comments
-- "Load More" button: `.wpdiscuz-loadmore` or `.wpd-load-more-submit`
-- API endpoint for fetching more comments
+### 3.4 Pagination for Comments
+wpDiscuz uses page-based pagination (not AJAX load more):
+- Pagination links: `.page-numbers` elements in `#wpdcom`
+- Current page indicator: `span.current`
+- URL patterns:
+  - `/article-url/comment-page-N/` (primary)
+  - `/article-url/?cpage=N` (alternative)
 
-**AJAX Request Pattern (to investigate):**
-```
-POST /wp-admin/admin-ajax.php
-action: wpdLoadMoreComments
-offset: N
-postId: XXXX
-```
+**Comment Page Discovery:**
+- Parse pagination links to find total page count
+- Iterate through all comment pages (2 through N)
+- Deduplicate comments by ID to avoid duplicates
 
 ---
 
@@ -177,156 +176,71 @@ For images posted in comments:
 
 ---
 
-## 5. Output Format: Sketch Engine Vertical
+## 5. Output Format: Plain Text Files
 
-### 5.1 Vertical Format Overview
-Sketch Engine uses "vertical" format: one token per line with tab-separated attributes, and XML-style structural tags.
+### 5.1 Plain Text Format Overview
+Each article is saved as a single .txt file with structured metadata header and threaded comment display.
 
 ### 5.2 Document Structure
-```xml
-<doc id="article_12345" url="https://..." title="Article Title" author="AuthorName" date="2017-01-20" categories="Category1|Category2" type="article">
-<p>
-<s>
-This
-is
-a
-sentence
-.
-</s>
-</p>
-</doc>
+```
+================================================================================
+TITLE: Article Title
+AUTHOR: AuthorName
+DATE: 2017-01-20
+URL: https://wattsupwiththat.com/2017/01/20/article-slug/
+CATEGORIES: Category1, Category2
+TAGS: tag1, tag2
+================================================================================
+
+ARTICLE CONTENT:
+----------------------------------------
+[Article body text here...]
+
+================================================================================
+COMMENTS (N total):
+================================================================================
+
+--- Comment #1 ---
+[Author]: CommenterName
+[Date]: 2017-01-20 14:30:00
+[Votes]: +5 / -2 (score: 3)
+[Depth]: 0
+
+[Comment text here...]
+
+  |__ --- Comment #2 [REPLY to comment by 12345] ---
+    [Author]: ReplyAuthor
+    [Date]: 2017-01-20 15:00:00
+    [Votes]: +2 / -0 (score: 2)
+    [Depth]: 1
+
+    [Reply text here...]
 ```
 
-### 5.3 Proposed Corpus Structure
+### 5.3 Comment Threading
+- Root comments (depth 0) are displayed without indentation
+- Reply comments are indented with visual tree markers (`|__`)
+- Comments are sorted in thread order (parent followed by children)
+- Each comment includes: author, timestamp, vote counts, depth level
 
-```xml
-<doc id="{article_id}" 
-     url="{url}" 
-     title="{title}" 
-     author="{author}" 
-     date="{YYYY-MM-DD}" 
-     year="{YYYY}"
-     month="{MM}"
-     categories="{cat1|cat2|...}" 
-     tags="{tag1|tag2|...}"
-     comment_count="{N}"
-     type="article">
-
-<!-- Article content -->
-<text type="article_body">
-<p>
-<s>
-word1
-word2
-...
-</s>
-</p>
-</text>
-
-<!-- Comments section -->
-<text type="comments">
-
-<comment id="{comment_id}" 
-         author="{author_name}" 
-         date="{YYYY-MM-DD HH:MM:SS}"
-         upvotes="{N}"
-         downvotes="{N}"
-         vote_score="{N}"
-         parent_id="{parent_id|ROOT}"
-         depth="{N}"
-         has_images="{true|false}"
-         image_refs="{img1.jpg|img2.png|...}">
-<s>
-word1
-word2
-...
-</s>
-</comment>
-
-</text>
-</doc>
-```
-
-### 5.4 Tokenisation Requirements
-- One token per line
-- Sentence boundaries marked with `<s>` and `</s>`
-- Paragraph boundaries marked with `<p>` and `</p>`
-- Handle special characters (escape `<`, `>`, `&`)
-- Preserve URLs as single tokens or mark specially
-- Consider using NLTK, spaCy, or similar for tokenisation
-
-### 5.5 File Organisation
+### 5.4 File Organisation
 ```
 output/
-├── corpus/
-│   ├── wuwt_2017_01.vert
-│   ├── wuwt_2017_02.vert
-│   ├── ...
-│   └── wuwt_2026_01.vert
-├── images/
-│   ├── 12345_67890_0.jpg
-│   ├── 12345_67890_1.png
+├── txt/
+│   ├── 20170120_article-slug.txt
+│   ├── 20170121_another-article.txt
 │   └── ...
 ├── metadata/
 │   ├── articles_index.json
-│   ├── image_mapping.json
 │   └── scrape_log.json
-└── config/
-    └── corpus_config.txt
+└── logs/
+    └── scraper_YYYYMMDD_HHMMSS.log
 ```
 
-### 5.6 Sketch Engine Configuration Template
-```
-NAME "WUWT Climate Discourse Corpus"
-PATH /path/to/corpus
-VERTICAL "wuwt_*.vert"
-ENCODING "utf-8"
-LANGUAGE "English"
-LOCALE "en_GB.UTF-8"
-
-ATTRIBUTE word
-ATTRIBUTE lc {
-    DYNAMIC lowercase
-    DYNLIB internal
-    FROMATTR word
-    FUNTYPE s
-    TRANSQUERY yes
-}
-
-STRUCTURE doc {
-    ATTRIBUTE id
-    ATTRIBUTE url
-    ATTRIBUTE title
-    ATTRIBUTE author
-    ATTRIBUTE date
-    ATTRIBUTE year
-    ATTRIBUTE month
-    ATTRIBUTE categories
-    ATTRIBUTE tags
-    ATTRIBUTE comment_count
-    ATTRIBUTE type
-}
-
-STRUCTURE text {
-    ATTRIBUTE type
-}
-
-STRUCTURE comment {
-    ATTRIBUTE id
-    ATTRIBUTE author
-    ATTRIBUTE date
-    ATTRIBUTE upvotes
-    ATTRIBUTE downvotes
-    ATTRIBUTE vote_score
-    ATTRIBUTE parent_id
-    ATTRIBUTE depth
-    ATTRIBUTE has_images
-    ATTRIBUTE image_refs
-}
-
-STRUCTURE p
-STRUCTURE s
-```
+### 5.5 Filename Convention
+Files are named using the pattern: `{YYYYMMDD}_{article-slug}.txt`
+- Date extracted from article publication date
+- Slug extracted from article URL
 
 ---
 
@@ -365,7 +279,7 @@ wuwt_scraper/
 │   ├── __init__.py
 │   ├── tokeniser.py       # Text tokenisation
 │   ├── text_cleaner.py    # HTML cleaning, normalisation
-│   └── vertical_writer.py # Output to Sketch Engine format
+│   └── vertical_writer.py # Output to plain text format
 ├── storage/
 │   ├── __init__.py
 │   ├── database.py        # SQLite for progress tracking
@@ -392,8 +306,7 @@ scraper:
 
 output:
   base_dir: "./output"
-  corpus_dir: "./output/corpus"
-  images_dir: "./output/images"
+  txt_dir: "./output/txt"
   metadata_dir: "./output/metadata"
   
 processing:
@@ -495,7 +408,8 @@ Use SQLite database to track:
 - Date parsing functions
 - HTML parsing for each element type
 - Tokenisation output format
-- Vertical file format validation
+- Plain text file format validation
+- Comment pagination detection
 
 ### 10.2 Integration Tests
 - Scrape single article with comments
@@ -529,15 +443,14 @@ Use SQLite database to track:
 
 ### Phase 4: Comment Scraping (Week 2-3)
 - [ ] Parse comment structure
-- [ ] Handle AJAX loading
-- [ ] Preserve reply threading
-- [ ] Download comment images
+- [ ] Handle comment page pagination (comment-page-N URLs)
+- [ ] Preserve reply threading with proper parent-child relationships
+- [ ] Deduplicate comments across pages
 
 ### Phase 5: Output Processing (Week 3)
 - [ ] Implement tokenisation
-- [ ] Generate vertical format
+- [ ] Generate plain text format with threading
 - [ ] Create metadata files
-- [ ] Write Sketch Engine config
 
 ### Phase 6: Testing and Refinement (Week 4)
 - [ ] Run full scrape
@@ -601,14 +514,15 @@ class ImageRef:
 
 1. **Start with HTML inspection**: Before writing scraping code, fetch and analyse actual HTML to confirm selectors
 
-2. **wpDiscuz complexity**: The comment system may require:
-   - JavaScript rendering (consider Playwright/Selenium)
-   - AJAX interception for "load more"
-   - Careful handling of nested replies
+2. **wpDiscuz comment pagination**: The comment system uses page-based pagination:
+   - URL pattern: `/article-url/comment-page-N/` or `?cpage=N`
+   - Detect total pages from `.page-numbers` elements
+   - Iterate through all comment pages
+   - Deduplicate comments by ID
 
 3. **Date parsing**: Site uses both relative ("5 hours ago") and absolute dates - implement robust parsing
 
-4. **Vertical format validation**: Test output with Sketch Engine's `encodevert` tool early
+4. **Plain text output**: Generate readable .txt files with visual threading for comments
 
 5. **Incremental development**: Build and test each component before moving to the next
 
@@ -618,6 +532,7 @@ class ImageRef:
 
 ---
 
-*Specification Version: 1.0*
+*Specification Version: 1.1*
 *Created: January 2026*
+*Updated: January 2026 - Switched to plain text output, added comment pagination support*
 *For: Academic Linguistics Research*

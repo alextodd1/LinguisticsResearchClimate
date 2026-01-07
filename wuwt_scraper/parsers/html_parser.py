@@ -403,6 +403,8 @@ class CommentParser:
             return comments
 
         # Parse individual comments
+        # Track processed elements to avoid duplicates when element matches multiple selectors
+        processed_elements = set()
         comment_selectors = [
             '.wpd-comment',
             '.comment',
@@ -412,6 +414,12 @@ class CommentParser:
 
         for selector in comment_selectors:
             for elem in comment_container.select(selector):
+                # Use element's id attribute or generate a unique key from position
+                elem_id = id(elem)
+                if elem_id in processed_elements:
+                    continue
+                processed_elements.add(elem_id)
+
                 comment = self._parse_single_comment(elem, article_url)
                 if comment:
                     comments.append(comment)

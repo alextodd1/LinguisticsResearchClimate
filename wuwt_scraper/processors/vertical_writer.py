@@ -30,7 +30,7 @@ class VerticalWriter:
 
     def write_article(self, article: Article, output_dir: Optional[Path] = None) -> str:
         """
-        Convert article and comments to vertical format.
+        Write article and comments to plain text format.
 
         Args:
             article: Article object with comments
@@ -39,32 +39,8 @@ class VerticalWriter:
         Returns:
             Path to written file
         """
-        output_dir = output_dir or self.config.corpus_dir
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Determine output file based on article date
-        if article.date_published:
-            year = article.date_published.year
-            month = article.date_published.month
-        else:
-            year = 2017
-            month = 1
-
-        filename = f"wuwt_{year}_{month:02d}.vert"
-        filepath = output_dir / filename
-
-        # Generate vertical content
-        content = self._article_to_vertical(article)
-
-        # Append to file
-        with open(filepath, 'a', encoding='utf-8') as f:
-            f.write(content)
-            f.write('\n')
-
-        # Also write plain text version
-        self.write_article_txt(article)
-
-        return str(filepath)
+        # Write plain text version only (no .vert files)
+        return self.write_article_txt(article, output_dir)
 
     def write_article_txt(self, article: Article, output_dir: Optional[Path] = None) -> str:
         """
@@ -96,7 +72,7 @@ class VerticalWriter:
 
     def _article_to_txt(self, article: Article) -> str:
         """
-        Convert article to plain text format.
+        Convert article to plain text format with preserved comment threading.
 
         Args:
             article: Article object
@@ -127,22 +103,74 @@ class VerticalWriter:
         lines.append(clean_text)
         lines.append("")
 
-        # Comments section
+        # Comments section with threaded structure
         if article.comments:
             lines.append("=" * 80)
             lines.append(f"COMMENTS ({len(article.comments)} total):")
             lines.append("=" * 80)
             lines.append("")
 
-            for i, comment in enumerate(article.comments, 1):
-                lines.append(self._comment_to_txt(comment, i))
+            # Build comment tree for proper threading display
+            comment_tree = self._build_comment_display_tree(article.comments)
+
+            for i, (comment, display_index) in enumerate(comment_tree, 1):
+                lines.append(self._comment_to_txt(comment, display_index))
                 lines.append("")
 
         return '\n'.join(lines)
 
+    def _build_comment_display_tree(self, comments: list) -> list:
+        """
+        Build a display-ordered list of comments preserving thread structure.
+
+        Args:
+            comments: List of Comment objects
+
+        Returns:
+            List of (comment, display_index) tuples in threaded display order
+        """
+        # Build lookup by ID
+        by_id = {c.id: c for c in comments}
+
+        # Find root comments (no parent or parent not in our set)
+        roots = []
+        children_map = {}  # parent_id -> list of children
+
+        for comment in comments:
+            parent_id = comment.parent_id
+            if parent_id and parent_id in by_id:
+                if parent_id not in children_map:
+                    children_map[parent_id] = []
+                children_map[parent_id].append(comment)
+            else:
+                roots.append(comment)
+
+        # Sort roots by timestamp
+        roots.sort(key=lambda c: c.timestamp or 0)
+
+        # Build display order with depth-first traversal
+        result = []
+        display_index = [0]  # Use list for mutable counter in nested function
+
+        def add_with_children(comment):
+            display_index[0] += 1
+            result.append((comment, display_index[0]))
+
+            # Get children and sort by timestamp
+            children = children_map.get(comment.id, [])
+            children.sort(key=lambda c: c.timestamp or 0)
+
+            for child in children:
+                add_with_children(child)
+
+        for root in roots:
+            add_with_children(root)
+
+        return result
+
     def _comment_to_txt(self, comment: Comment, index: int) -> str:
         """
-        Convert comment to plain text format.
+        Convert comment to plain text format with visual threading.
 
         Args:
             comment: Comment object
@@ -153,24 +181,34 @@ class VerticalWriter:
         """
         lines = []
 
-        # Indent based on depth
-        indent = "  " * comment.depth
+        # Visual threading indicator based on depth
+        if comment.depth == 0:
+            prefix = ""
+            thread_marker = ""
+        else:
+            # Use visual tree structure for replies
+            prefix = "    " * (comment.depth - 1) + "  |__ "
+            thread_marker = f"[REPLY to comment by {comment.parent_id}] " if comment.parent_id else ""
+
+        # Indent for subsequent lines
+        indent = "    " * comment.depth
 
         # Comment header
-        timestamp_str = comment.timestamp.strftime('%Y-%m-%d %H:%M') if comment.timestamp else "Unknown date"
-        lines.append(f"{indent}--- Comment #{index} ---")
-        lines.append(f"{indent}Author: {comment.author_name}")
-        lines.append(f"{indent}Date: {timestamp_str}")
-        lines.append(f"{indent}Votes: +{comment.upvotes}/-{comment.downvotes}")
-        if comment.parent_id:
-            lines.append(f"{indent}Reply to: {comment.parent_id}")
+        timestamp_str = comment.timestamp.strftime('%Y-%m-%d %H:%M:%S') if comment.timestamp else "Unknown date"
+
+        lines.append(f"{prefix}--- Comment #{index} {thread_marker}---")
+        lines.append(f"{indent}[Author]: {comment.author_name}")
+        lines.append(f"{indent}[Date]: {timestamp_str}")
+        lines.append(f"{indent}[Votes]: +{comment.upvotes} / -{comment.downvotes} (score: {comment.vote_score})")
+        lines.append(f"{indent}[Depth]: {comment.depth}")
         lines.append(f"{indent}")
 
         # Comment text
         clean_text = self.cleaner.clean(comment.text_clean or comment.text_html)
         # Indent the comment text as well
         for line in clean_text.split('\n'):
-            lines.append(f"{indent}{line}")
+            if line.strip():
+                lines.append(f"{indent}{line}")
 
         return '\n'.join(lines)
 

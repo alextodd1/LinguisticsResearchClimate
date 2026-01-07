@@ -30,7 +30,7 @@ class CommentScraper:
 
     def scrape_comments(self, article: Article, html_content: Optional[str] = None) -> List[Comment]:
         """
-        Scrape all comments from an article, including AJAX-loaded ones.
+        Scrape all comments from an article, including paginated comments.
 
         Args:
             article: Article object
@@ -51,32 +51,126 @@ class CommentScraper:
                 logger.error(f"Error fetching article {article.url}: {e}")
                 return []
 
-        # Parse initial comments from page
+        # Parse initial comments from page 1
         comments = self.parser.parse_comments(html_content, article.url)
-        logger.debug(f"Found {len(comments)} initial comments on {article.url}")
+        logger.debug(f"Found {len(comments)} comments on page 1 of {article.url}")
 
-        # Get wpDiscuz configuration for AJAX loading
-        wpdiscuz_config = self._extract_wpdiscuz_config(html_content)
-
-        if wpdiscuz_config:
-            # Load additional comments via AJAX
-            ajax_comments = self._load_ajax_comments(
-                article.url,
-                html_content,
-                wpdiscuz_config,
-                len(comments)
-            )
-            comments.extend(ajax_comments)
+        # Check for comment pagination and scrape all pages
+        total_pages = self._get_total_comment_pages(html_content)
+        logger.debug(f"Detected {total_pages} comment page(s) for article: {article.id}")
+        if total_pages > 1:
+            logger.info(f"Article {article.id}: Found {total_pages} comment pages, fetching all...")
+            paginated_comments = self._scrape_paginated_comments(article.url, total_pages)
+            comments.extend(paginated_comments)
+            logger.info(f"Article {article.id}: Total comments before dedup: {len(comments)}")
 
         # Build proper threading hierarchy
         comments = self._build_comment_tree(comments)
 
+        # Remove duplicates based on comment ID
+        seen_ids = set()
+        unique_comments = []
+        duplicates = 0
+        for comment in comments:
+            if comment.id not in seen_ids:
+                seen_ids.add(comment.id)
+                unique_comments.append(comment)
+            else:
+                duplicates += 1
+        comments = unique_comments
+
+        if duplicates > 0:
+            logger.debug(f"Removed {duplicates} duplicate comments for article: {article.id}")
+
         # Save to database
         if comments:
             self.db.add_comments(comments)
+            logger.debug(f"Saved {len(comments)} comments to database for article: {article.id}")
 
-        logger.info(f"Total comments scraped from {article.url}: {len(comments)}")
+        # Log comment statistics
+        root_comments = sum(1 for c in comments if c.depth == 0)
+        reply_comments = len(comments) - root_comments
+        logger.info(f"Article {article.id}: {len(comments)} total comments ({root_comments} root, {reply_comments} replies)")
         return comments
+
+    def _get_total_comment_pages(self, html_content: str) -> int:
+        """
+        Detect total number of comment pages from pagination.
+
+        Args:
+            html_content: HTML content of article page
+
+        Returns:
+            Total number of comment pages (1 if no pagination)
+        """
+        soup = BeautifulSoup(html_content, 'lxml')
+
+        # Look for pagination in comment section
+        # wpDiscuz uses .page-numbers for pagination
+        pagination = soup.select('#wpdcom .page-numbers, .wpd-comment-pagination .page-numbers, .comments-pagination .page-numbers')
+
+        if not pagination:
+            # Also check WordPress default pagination
+            pagination = soup.select('.comment-navigation .page-numbers, .comments-nav .page-numbers')
+
+        if not pagination:
+            return 1
+
+        max_page = 1
+        for elem in pagination:
+            text = elem.get_text(strip=True)
+            # Skip "next", "prev", etc
+            if text.isdigit():
+                page_num = int(text)
+                if page_num > max_page:
+                    max_page = page_num
+
+        return max_page
+
+    def _scrape_paginated_comments(self, article_url: str, total_pages: int) -> List[Comment]:
+        """
+        Scrape comments from all paginated pages (starting from page 2).
+
+        Args:
+            article_url: Base article URL
+            total_pages: Total number of comment pages
+
+        Returns:
+            List of comments from pages 2 onwards
+        """
+        all_comments = []
+
+        # Remove trailing slash for consistent URL building
+        base_url = article_url.rstrip('/')
+
+        for page_num in range(2, total_pages + 1):
+            # WordPress comment pagination URL pattern
+            page_url = f"{base_url}/comment-page-{page_num}/"
+
+            logger.debug(f"Fetching comment page {page_num}/{total_pages}: {page_url}")
+
+            try:
+                response = self.http.get_with_retry(page_url)
+                if response and response.status_code == 200:
+                    page_comments = self.parser.parse_comments(response.text, article_url)
+                    logger.info(f"  Page {page_num}/{total_pages}: {len(page_comments)} comments")
+                    all_comments.extend(page_comments)
+                else:
+                    # Try alternative URL pattern with query parameter
+                    alt_url = f"{base_url}?cpage={page_num}"
+                    logger.debug(f"Primary URL failed, trying alternative: {alt_url}")
+                    response = self.http.get_with_retry(alt_url)
+                    if response and response.status_code == 200:
+                        page_comments = self.parser.parse_comments(response.text, article_url)
+                        logger.info(f"  Page {page_num}/{total_pages}: {len(page_comments)} comments (alt URL)")
+                        all_comments.extend(page_comments)
+                    else:
+                        logger.warning(f"Could not fetch comment page {page_num} - both URL patterns failed")
+            except Exception as e:
+                logger.error(f"Error fetching comment page {page_num}: {e}", exc_info=True)
+
+        logger.info(f"Pagination complete: {len(all_comments)} comments from pages 2-{total_pages}")
+        return all_comments
 
     def _extract_wpdiscuz_config(self, html_content: str) -> Optional[Dict[str, Any]]:
         """

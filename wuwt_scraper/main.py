@@ -23,27 +23,52 @@ from .processors.vertical_writer import VerticalWriter
 
 
 def setup_logging(log_dir: Path, verbose: bool = False):
-    """Configure logging."""
+    """Configure detailed logging with file and console output."""
     log_dir.mkdir(parents=True, exist_ok=True)
 
     log_file = log_dir / f"scraper_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 
     level = logging.DEBUG if verbose else logging.INFO
 
-    logging.basicConfig(
-        level=level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler(sys.stdout)
-        ]
+    # Detailed format for file logging
+    file_format = logging.Formatter(
+        '%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d | %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
     )
+
+    # Concise format for console
+    console_format = logging.Formatter(
+        '%(asctime)s | %(levelname)-8s | %(message)s',
+        datefmt='%H:%M:%S'
+    )
+
+    # File handler - always DEBUG level for comprehensive logs
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(file_format)
+
+    # Console handler - respects verbose flag
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(level)
+    console_handler.setFormatter(console_format)
+
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
 
     # Reduce noise from external libraries
     logging.getLogger('urllib3').setLevel(logging.WARNING)
     logging.getLogger('requests').setLevel(logging.WARNING)
+    logging.getLogger('chardet').setLevel(logging.WARNING)
+    logging.getLogger('charset_normalizer').setLevel(logging.WARNING)
 
-    return logging.getLogger(__name__)
+    logger = logging.getLogger(__name__)
+    logger.info(f"Logging initialized - Log file: {log_file}")
+    logger.info(f"Log level: {'DEBUG' if verbose else 'INFO'}")
+
+    return logger
 
 
 class WUWTScraper:
@@ -102,9 +127,6 @@ class WUWTScraper:
             if comments_only:
                 self.logger.info("Scraping comments for existing articles...")
                 comments_scraped = self._scrape_comments_only(limit)
-
-            # Write corpus config
-            self.vertical_writer.write_corpus_config()
 
         except KeyboardInterrupt:
             self.logger.info("Scraping interrupted by user")
@@ -231,13 +253,14 @@ class WUWTScraper:
         if len(comments) > 10:
             print(f"\n... and {len(comments) - 10} more comments")
 
-        # Test vertical output
+        # Write test output to test folder (txt only, no vert)
         article.comments = comments
-        vertical = self.vertical_writer._article_to_vertical(article)
-        print(f"\n=== VERTICAL OUTPUT PREVIEW ===")
-        print(vertical[:2000])
-        if len(vertical) > 2000:
-            print(f"\n... ({len(vertical)} total characters)")
+        test_output_dir = self.config.base_dir / "test_output"
+        test_output_dir.mkdir(parents=True, exist_ok=True)
+
+        txt_path = self.vertical_writer.write_article_txt(article, test_output_dir)
+        print(f"\n=== TEST OUTPUT ===")
+        print(f"Written to: {txt_path}")
 
 
 def main():
