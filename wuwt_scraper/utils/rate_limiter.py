@@ -10,7 +10,7 @@ from typing import Optional
 class RateLimiter:
     """Thread-safe rate limiter with configurable delay."""
 
-    def __init__(self, delay: float = 2.0):
+    def __init__(self, delay: float = 0.2):
         """
         Initialize rate limiter.
 
