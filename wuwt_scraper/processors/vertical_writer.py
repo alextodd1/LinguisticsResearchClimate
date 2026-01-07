@@ -113,8 +113,8 @@ class VerticalWriter:
             # Build comment tree for proper threading display
             comment_tree = self._build_comment_display_tree(article.comments)
 
-            for i, (comment, display_index) in enumerate(comment_tree, 1):
-                lines.append(self._comment_to_txt(comment, display_index))
+            for comment, display_index, computed_depth, parent_display_idx in comment_tree:
+                lines.append(self._comment_to_txt(comment, display_index, computed_depth, parent_display_idx))
                 lines.append("")
 
         return '\n'.join(lines)
@@ -127,80 +127,104 @@ class VerticalWriter:
             comments: List of Comment objects
 
         Returns:
-            List of (comment, display_index) tuples in threaded display order
+            List of (comment, display_index, computed_depth, parent_display_index) tuples
+            in threaded display order
         """
-        # Build lookup by ID
+        # Build lookup by ID - both full ID and short numeric ID
         by_id = {c.id: c for c in comments}
+        # Also map short numeric IDs (extracted from wpd-comm-XXXXXX_Y format)
+        short_id_map = {}
+        for c in comments:
+            # Extract numeric ID from formats like "wpd-comm-1943985_0"
+            if c.id.startswith('wpd-comm-'):
+                parts = c.id.replace('wpd-comm-', '').split('_')
+                if parts:
+                    short_id_map[parts[0]] = c.id
+            # Also try just the ID as-is for numeric IDs
+            short_id_map[c.id] = c.id
 
         # Find root comments (no parent or parent not in our set)
         roots = []
-        children_map = {}  # parent_id -> list of children
+        children_map = {}  # parent_id (full) -> list of children
 
         for comment in comments:
             parent_id = comment.parent_id
-            if parent_id and parent_id in by_id:
-                if parent_id not in children_map:
-                    children_map[parent_id] = []
-                children_map[parent_id].append(comment)
+            # Convert short parent_id to full ID if needed
+            full_parent_id = short_id_map.get(parent_id, parent_id) if parent_id else None
+
+            if full_parent_id and full_parent_id in by_id:
+                if full_parent_id not in children_map:
+                    children_map[full_parent_id] = []
+                children_map[full_parent_id].append(comment)
             else:
                 roots.append(comment)
 
-        # Sort roots by timestamp
-        roots.sort(key=lambda c: c.timestamp or 0)
+        # Sort roots by timestamp (handle None timestamps)
+        roots.sort(key=lambda c: c.timestamp or datetime.min)
 
         # Build display order with depth-first traversal
         result = []
         display_index = [0]  # Use list for mutable counter in nested function
+        # Map comment ID to its display index for parent references
+        id_to_display_index = {}
 
-        def add_with_children(comment):
+        def add_with_children(comment, depth, parent_display_idx):
             display_index[0] += 1
-            result.append((comment, display_index[0]))
+            current_display_idx = display_index[0]
+            id_to_display_index[comment.id] = current_display_idx
+            result.append((comment, current_display_idx, depth, parent_display_idx))
 
-            # Get children and sort by timestamp
+            # Get children and sort by timestamp (handle None timestamps)
             children = children_map.get(comment.id, [])
-            children.sort(key=lambda c: c.timestamp or 0)
+            children.sort(key=lambda c: c.timestamp or datetime.min)
 
             for child in children:
-                add_with_children(child)
+                add_with_children(child, depth + 1, current_display_idx)
 
         for root in roots:
-            add_with_children(root)
+            add_with_children(root, 0, None)
 
         return result
 
-    def _comment_to_txt(self, comment: Comment, index: int) -> str:
+    def _comment_to_txt(self, comment: Comment, index: int, computed_depth: int, parent_display_idx: int = None) -> str:
         """
         Convert comment to plain text format with visual threading.
 
         Args:
             comment: Comment object
-            index: Comment number
+            index: Comment display number
+            computed_depth: Depth computed from tree traversal
+            parent_display_idx: Display index of parent comment (for reply references)
 
         Returns:
             Plain text string for comment
         """
         lines = []
 
-        # Visual threading indicator based on depth
-        if comment.depth == 0:
+        # Visual threading indicator based on computed depth (from tree structure)
+        if computed_depth == 0:
             prefix = ""
             thread_marker = ""
         else:
             # Use visual tree structure for replies
-            prefix = "    " * (comment.depth - 1) + "  |__ "
-            thread_marker = f"[REPLY to comment by {comment.parent_id}] " if comment.parent_id else ""
+            prefix = "    " * (computed_depth - 1) + "  |__ "
+            if parent_display_idx:
+                thread_marker = f"[REPLY to Comment #{parent_display_idx}] "
+            else:
+                thread_marker = ""
 
         # Indent for subsequent lines
-        indent = "    " * comment.depth
+        indent = "    " * computed_depth
 
         # Comment header
         timestamp_str = comment.timestamp.strftime('%Y-%m-%d %H:%M:%S') if comment.timestamp else "Unknown date"
 
         lines.append(f"{prefix}--- Comment #{index} {thread_marker}---")
+        lines.append(f"{indent}[ID]: {comment.id}")
         lines.append(f"{indent}[Author]: {comment.author_name}")
         lines.append(f"{indent}[Date]: {timestamp_str}")
         lines.append(f"{indent}[Votes]: +{comment.upvotes} / -{comment.downvotes} (score: {comment.vote_score})")
-        lines.append(f"{indent}[Depth]: {comment.depth}")
+        lines.append(f"{indent}[Depth]: {computed_depth}")
         lines.append(f"{indent}")
 
         # Comment text
