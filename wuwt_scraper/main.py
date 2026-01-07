@@ -219,7 +219,7 @@ class WUWTScraper:
             return
 
         # Parse article
-        from .parsers.html_parser import ArticleParser, CommentParser
+        from .parsers.html_parser import ArticleParser
 
         article_parser = ArticleParser(self.config.base_url)
         article = article_parser.parse_article(response.text, url)
@@ -234,9 +234,8 @@ class WUWTScraper:
         print(f"Content preview: {article.content_text[:500]}...")
         print(f"Comment count (from page): {article.comment_count}")
 
-        # Parse comments
-        comment_parser = CommentParser(self.config.base_url)
-        comments = comment_parser.parse_comments(response.text, url)
+        # Use full CommentScraper with pagination support
+        comments = self.comment_scraper.scrape_comments(article, html_content=response.text)
 
         print(f"\n=== COMMENTS ({len(comments)}) ===")
         for i, comment in enumerate(comments[:10]):  # First 10

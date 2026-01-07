@@ -578,18 +578,30 @@ class CommentParser:
             except ValueError:
                 pass
 
-        # Infer depth from nesting
+        # Extract depth from class like 'depth-2' or 'wpd_comment_level-2'
         if depth == 0:
-            parent = elem.parent
-            while parent:
-                if parent.name == 'ul' and 'children' in parent.get('class', []):
-                    depth += 1
-                elif parent.has_attr('class') and any(
-                    c in parent.get('class', [])
-                    for c in ['wpd-comment-replies', 'comment-replies', 'children']
-                ):
-                    depth += 1
-                parent = parent.parent
+            classes = elem.get('class', [])
+            for cls in classes:
+                # Match depth-N pattern
+                depth_match = re.match(r'depth-(\d+)', cls)
+                if depth_match:
+                    depth = int(depth_match.group(1)) - 1  # depth-1 = root (depth 0)
+                    break
+                # Match wpd_comment_level-N pattern
+                level_match = re.match(r'wpd_comment_level-(\d+)', cls)
+                if level_match:
+                    depth = int(level_match.group(1)) - 1  # level-1 = root (depth 0)
+                    break
+
+        # Try to extract parent from wpDiscuz ID format: wpd-comm-{id}_{parent_id}
+        if not parent_id:
+            elem_id = elem.get('id', '')
+            # Pattern: wpd-comm-1234567_9876543 where second number is parent (0 = root)
+            wpd_match = re.search(r'wpd-comm-\d+_(\d+)', elem_id)
+            if wpd_match:
+                potential_parent = wpd_match.group(1)
+                if potential_parent != '0':
+                    parent_id = potential_parent
 
         # Try to find parent from reply link
         if not parent_id:

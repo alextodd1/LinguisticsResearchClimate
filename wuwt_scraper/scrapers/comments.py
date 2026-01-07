@@ -349,21 +349,40 @@ class CommentScraper:
         Returns:
             Comments with corrected hierarchy
         """
-        # Build lookup by ID
+        # Build lookup by full ID
         by_id = {c.id: c for c in comments}
+
+        # Also build lookup by numeric ID extracted from wpDiscuz format
+        # e.g., wpd-comm-1943985_0 -> maps numeric "1943985" to comment
+        by_numeric_id = {}
+        for c in comments:
+            # Extract numeric comment ID from wpd-comm-{id}_{parent} format
+            match = re.search(r'wpd-comm-(\d+)_', c.id)
+            if match:
+                by_numeric_id[match.group(1)] = c
+            else:
+                # Try plain numeric ID
+                if c.id.isdigit():
+                    by_numeric_id[c.id] = c
 
         # Verify and fix parent references
         for comment in comments:
-            if comment.parent_id and comment.parent_id not in by_id:
-                # Parent not found, treat as root
-                comment.parent_id = None
-                comment.depth = 0
-
-            elif comment.parent_id:
-                # Ensure parent exists and calculate depth
+            if comment.parent_id:
+                # Try to find parent by full ID first
                 parent = by_id.get(comment.parent_id)
+
+                # If not found, try by numeric ID
+                if not parent:
+                    parent = by_numeric_id.get(comment.parent_id)
+
                 if parent:
+                    # Calculate depth based on parent
                     comment.depth = parent.depth + 1
+                else:
+                    # Parent not found, treat as root
+                    logger.debug(f"Parent {comment.parent_id} not found for comment {comment.id}, treating as root")
+                    comment.parent_id = None
+                    comment.depth = 0
 
         # Sort by timestamp, then by depth for consistent ordering
         comments.sort(key=lambda c: (c.timestamp or 0, c.depth))
