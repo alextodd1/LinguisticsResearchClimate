@@ -341,11 +341,20 @@ class ArticleParser:
         return content_html, content_text
 
     def _extract_comment_count(self, soup: BeautifulSoup) -> int:
-        """Extract comment count from page."""
-        # Look for comment count in various places
+        """Extract comment count from page.
+
+        Fixed: Previously matched external links containing '#comments' in URLs,
+        which caused incorrect counts (e.g., BBC article IDs like 68447182).
+        Now only extracts from internal comment links and removes dangerous
+        fallback that extracted arbitrary numbers.
+        """
+        # Get canonical URL to identify internal links
+        canonical_tag = soup.find('link', rel='canonical')
+        canonical = canonical_tag['href'] if canonical_tag and canonical_tag.get('href') else None
+
+        # Try specific WUWT comment count locations first (most reliable)
         selectors = [
             '.comments-link',
-            'a[href*="#comments"]',
             '.comment-count',
             '#comments h2',
             '#comments h3',
@@ -359,10 +368,27 @@ class ArticleParser:
                 if match:
                     return int(match.group(1))
 
-                # Try just finding a number
-                match = re.search(r'(\d+)', text)
+        # Try comment links, but only if they're internal (same domain/page)
+        # This prevents matching external links like BBC articles with #comments in URL
+        for link in soup.select('a[href*="#comments"]'):
+            href = link.get('href', '')
+            # Only use if it's an internal link
+            is_internal = (
+                href.startswith('#') or
+                href.startswith('/') or
+                (canonical and href.startswith(canonical.rsplit('#', 1)[0]))
+            )
+            if is_internal:
+                text = link.get_text()
+                match = re.search(r'(\d+)\s*(?:comments?|responses?)', text, re.I)
                 if match:
                     return int(match.group(1))
+
+        # Final fallback: count actual comment elements on page
+        # This is more reliable than guessing from arbitrary numbers
+        wpd_comments = soup.select('.wpd-comment, .comment, [id^="comment-"]')
+        if wpd_comments:
+            return len(wpd_comments)
 
         return 0
 
